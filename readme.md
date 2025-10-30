@@ -87,7 +87,7 @@ CMD [ "sh", "-c", "exec $UVICORN_CMD" ]
 
 
 
-- VERSION of Read me
+## Latest VERSION of Read me
 
 # FastAPI Temperature Service (CEC Assignment)
 
