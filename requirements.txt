@@ -1,5 +1,8 @@
-fastapi
-uvicorn[standard]
-pydantic
-httpx
-python-dateutil
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+sqlalchemy==2.0.23
+pydantic==2.5.0
+python-dateutil==2.8.2
+httpx==0.25.1
+confluent-kafka==2.3.0
+requests==2.31.0
