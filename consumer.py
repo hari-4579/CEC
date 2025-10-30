@@ -5,11 +5,10 @@ import asyncio
 from typing import Dict, List, Optional, Set
 from datetime import datetime
 from collections import defaultdict
+from io import BytesIO
 
 from confluent_kafka import Consumer, KafkaError
-from confluent_kafka.schema_registry import SchemaRegistryClient
-from confluent_kafka.schema_registry.avro import AvroDeserializer
-from confluent_kafka.error import SerializerError
+import fastavro
 import httpx
 
 from db import SessionLocal, insert_reading
@@ -25,14 +24,10 @@ KAFKA_BOOTSTRAP_SERVERS = os.getenv(
 )
 KAFKA_GROUP_ID = os.getenv("KAFKA_GROUP_ID", "group3_123456")
 KAFKA_TOPIC = os.getenv("TEAM_TOPIC", "experiment")
-SCHEMA_REGISTRY_URL = os.getenv(
-    "SCHEMA_REGISTRY_URL",
-    "https://schema-registry.dlandau.nl"
-)
 
 # SSL Configuration
-SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "./auth/ca.crt")
-SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "./auth/kafka.keystore.pkcs12")
+SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "auth/ca.crt")
+SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "auth/kafka.keystore.pkcs12")
 SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "cc2023")
 
 # Notifications Service
@@ -58,30 +53,20 @@ class ExperimentState:
 class KafkaConsumerService:
     def __init__(self):
         self.consumer = None
-        self.deserializer = None
         self.running = False
         self.experiments: Dict[str, ExperimentState] = {}
         self.consumer_task = None
-        self.schema_registry_client = None
         
     async def start(self):
         """Initialize Kafka consumer and start consuming messages"""
         try:
             logger.info("Initializing Kafka Consumer Service")
             
-            # Initialize Schema Registry
-            self.schema_registry_client = SchemaRegistryClient(
-                {"url": SCHEMA_REGISTRY_URL}
-            )
-            
-            # Create Avro deserializer
-            self.deserializer = AvroDeserializer(self.schema_registry_client)
-            
             # Kafka Consumer Configuration
             conf = {
                 'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
                 'group.id': KAFKA_GROUP_ID,
-                'auto.offset.reset': 'latest',
+                'auto.offset.reset': 'earliest',
                 'security.protocol': 'SSL',
                 'ssl.ca.location': SSL_CA_LOCATION,
                 'ssl.keystore.location': SSL_KEYSTORE_LOCATION,
@@ -140,11 +125,19 @@ class KafkaConsumerService:
                 
                 # Deserialize message
                 try:
-                    record_name = msg.headers().get("record_name") if msg.headers() else None
-                    record_data = self.deserializer(msg.value(), None)
+                    # Get record_name from headers (list of tuples)
+                    record_name = None
+                    if msg.headers():
+                        for header_name, header_value in msg.headers():
+                            if header_name == "record_name":
+                                record_name = header_value.decode() if isinstance(header_value, bytes) else header_value
+                                break
                     
-                    # Route to appropriate handler
-                    if record_name == "ExperimentConfig":
+                    # Deserialize plain Avro message (not Confluent format)
+                    record_data = fastavro.reader(BytesIO(msg.value())).__next__()
+                    
+                    # Route to appropriate handler based on record type (EXACT NAMES FROM README)
+                    if record_name == "ExperimentConfig":  # ← IMPORTANT: Capital E, not experiment_configured
                         await self._handle_experiment_config(record_data)
                     elif record_name == "stabilization_started":
                         await self._handle_stabilization_started(record_data)
@@ -157,10 +150,8 @@ class KafkaConsumerService:
                     else:
                         logger.warning(f"Unknown record type: {record_name}")
                 
-                except SerializerError as e:
-                    logger.error(f"Failed to deserialize message: {e}")
                 except Exception as e:
-                    logger.error(f"Error processing message: {e}")
+                    logger.error(f"Failed to deserialize message: {e}")
             
             except Exception as e:
                 logger.error(f"Unexpected error in consume loop: {e}")
@@ -190,7 +181,7 @@ class KafkaConsumerService:
         )
     
     async def _handle_stabilization_started(self, data: dict):
-        """Handle StabilizationStarted event"""
+        """Handle stabilization_started event"""
         experiment_id = data.get("experiment")
         timestamp = data.get("timestamp")
         
@@ -200,7 +191,7 @@ class KafkaConsumerService:
             self.experiments[experiment_id].phase = "stabilizing"
     
     async def _handle_experiment_started(self, data: dict):
-        """Handle ExperimentStarted event"""
+        """Handle experiment_started event"""
         experiment_id = data.get("experiment")
         timestamp = data.get("timestamp")
         
@@ -210,7 +201,7 @@ class KafkaConsumerService:
             self.experiments[experiment_id].phase = "running"
     
     async def _handle_sensor_temperature_measured(self, data: dict):
-        """Handle SensorTemperatureMeasured event"""
+        """Handle sensor_temperature_measured event"""
         experiment_id = data.get("experiment")
         sensor_id = data.get("sensor")
         measurement_id = data.get("measurement_id")
@@ -234,7 +225,7 @@ class KafkaConsumerService:
             # Calculate average temperature
             avg_temp = sum(exp_state.sensor_readings[timestamp].values()) / len(exp_state.sensors)
             
-            logger.info(f"Average temp for {experiment_id} at {timestamp}: {avg_temp}")
+            logger.debug(f"Average temp for {experiment_id} at {timestamp}: {avg_temp}")
             
             # Handle based on phase
             if exp_state.phase == "stabilizing":
@@ -276,7 +267,7 @@ class KafkaConsumerService:
         try:
             db = SessionLocal()
             insert_reading(db, reading)
-            logger.info(f"Inserted reading for {exp_state.experiment_id}")
+            logger.debug(f"Inserted reading for {exp_state.experiment_id}: {avg_temp}°C")
         except Exception as e:
             logger.error(f"Failed to insert reading: {e}")
         finally:
@@ -284,9 +275,9 @@ class KafkaConsumerService:
         
         # Check if out of range
         if avg_temp < exp_state.min_temp or avg_temp > exp_state.max_temp:
-            # Only notify once per out-of-range event
+            # Only notify once per out-of-range event (per measurement_id)
             if measurement_id not in exp_state.last_notification_time:
-                logger.warning(f"Out of range temp for {exp_state.experiment_id}: {avg_temp}")
+                logger.warning(f"Out of range temp for {exp_state.experiment_id}: {avg_temp}°C (range: {exp_state.min_temp}-{exp_state.max_temp})")
                 exp_state.last_notification_time[measurement_id] = timestamp
                 
                 await self._notify_out_of_range(
@@ -294,7 +285,7 @@ class KafkaConsumerService:
                 )
     
     async def _handle_experiment_terminated(self, data: dict):
-        """Handle ExperimentTerminated event"""
+        """Handle experiment_terminated event"""
         experiment_id = data.get("experiment")
         timestamp = data.get("timestamp")
         
