@@ -65,7 +65,7 @@ class KafkaConsumerService:
             conf = {
                 'bootstrap.servers': KAFKA_BOOTSTRAP_SERVERS,
                 'group.id': KAFKA_GROUP_ID,
-                'auto.offset.reset': 'earliest',
+                'auto.offset.reset': 'latest',
                 'security.protocol': 'SSL',
                 'ssl.ca.location': SSL_CA_LOCATION,
                 'ssl.keystore.location': SSL_KEYSTORE_LOCATION,
