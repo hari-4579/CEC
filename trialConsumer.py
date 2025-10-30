@@ -12,7 +12,8 @@ from db import SessionLocal, insert_reading
 
 logger = logging.getLogger("kafka_consumer")
 
-KAFKA_BOOTSTRAP_SERVERS = os.environ.get("KAFKA_BOOTSTRAP_SERVERS", "localhost:9092")
+export KAFKA_BOOTSTRAP_SERVERS=kafka1.dlandau.nl:19092
+
 KAFKA_GROUP_ID = os.environ.get("KAFKA_GROUP_ID", "cec-consumer-group")
 KAFKA_TOPIC = os.environ.get("KAFKA_TOPIC", "experiment")
 
