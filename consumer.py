@@ -1,8 +1,7 @@
 import os
-import json
 import logging
 import asyncio
-from typing import Dict, List, Optional, Set
+from typing import Dict, List, Optional
 from datetime import datetime
 from collections import defaultdict
 from io import BytesIO
@@ -136,8 +135,11 @@ class KafkaConsumerService:
                     # Deserialize plain Avro message (not Confluent format)
                     record_data = fastavro.reader(BytesIO(msg.value())).__next__()
                     
-                    # Route to appropriate handler based on record type (EXACT NAMES FROM README)
-                    if record_name == "ExperimentConfig":  # ← IMPORTANT: Capital E, not experiment_configured
+                    logger.debug(f"Received event: {record_name}, data: {record_data}")
+                    
+                    # Route to appropriate handler based on record type
+                    # Handle BOTH possible naming conventions
+                    if record_name in ["ExperimentConfig", "experiment_configured"]:
                         await self._handle_experiment_config(record_data)
                     elif record_name == "stabilization_started":
                         await self._handle_stabilization_started(record_data)
@@ -155,7 +157,7 @@ class KafkaConsumerService:
             
             except Exception as e:
                 logger.error(f"Unexpected error in consume loop: {e}")
-                await asyncio.sleep(1)  # Brief pause before retrying
+                await asyncio.sleep(1)
     
     async def _handle_experiment_config(self, data: dict):
         """Handle ExperimentConfig event"""
@@ -170,7 +172,7 @@ class KafkaConsumerService:
             logger.error(f"Missing temperature range for experiment {experiment_id}")
             return
         
-        logger.info(f"Experiment config received: {experiment_id} (temp range: {min_temp}-{max_temp})")
+        logger.info(f"✅ Experiment config received: {experiment_id} (range: {min_temp}°C-{max_temp}°C, {len(sensors)} sensors)")
         
         self.experiments[experiment_id] = ExperimentState(
             experiment_id=experiment_id,
@@ -183,22 +185,24 @@ class KafkaConsumerService:
     async def _handle_stabilization_started(self, data: dict):
         """Handle stabilization_started event"""
         experiment_id = data.get("experiment")
-        timestamp = data.get("timestamp")
         
-        logger.info(f"Stabilization started for experiment: {experiment_id}")
+        logger.info(f"🌡️  Stabilization started for experiment: {experiment_id}")
         
         if experiment_id in self.experiments:
             self.experiments[experiment_id].phase = "stabilizing"
+        else:
+            logger.warning(f"Stabilization started but experiment {experiment_id} not configured yet")
     
     async def _handle_experiment_started(self, data: dict):
         """Handle experiment_started event"""
         experiment_id = data.get("experiment")
-        timestamp = data.get("timestamp")
         
-        logger.info(f"Experiment started: {experiment_id}")
+        logger.info(f"▶️  Experiment started: {experiment_id}")
         
         if experiment_id in self.experiments:
             self.experiments[experiment_id].phase = "running"
+        else:
+            logger.warning(f"Experiment started but experiment {experiment_id} not configured yet")
     
     async def _handle_sensor_temperature_measured(self, data: dict):
         """Handle sensor_temperature_measured event"""
@@ -215,19 +219,19 @@ class KafkaConsumerService:
         
         exp_state = self.experiments[experiment_id]
         
-        # Store sensor reading
+        # Store sensor reading for this timestamp
         if timestamp not in exp_state.sensor_readings:
             exp_state.sensor_readings[timestamp] = {}
         exp_state.sensor_readings[timestamp][sensor_id] = temperature
         
-        # Check if we have readings from all sensors for this timestamp
+        # Check if we have readings from ALL sensors for this timestamp
         if len(exp_state.sensor_readings[timestamp]) == len(exp_state.sensors):
-            # Calculate average temperature
+            # Calculate average temperature across all sensors
             avg_temp = sum(exp_state.sensor_readings[timestamp].values()) / len(exp_state.sensors)
             
-            logger.debug(f"Average temp for {experiment_id} at {timestamp}: {avg_temp}")
+            logger.debug(f"📊 Avg temp for {experiment_id}: {avg_temp:.2f}°C (range: {exp_state.min_temp}-{exp_state.max_temp})")
             
-            # Handle based on phase
+            # Handle based on current phase
             if exp_state.phase == "stabilizing":
                 await self._handle_stabilization_phase(
                     exp_state, avg_temp, measurement_id, measurement_hash, timestamp
@@ -245,7 +249,7 @@ class KafkaConsumerService:
         """Handle temperature reading during stabilization phase"""
         # Check if temperature has stabilized (entered acceptable range)
         if not exp_state.stabilized and exp_state.min_temp <= avg_temp <= exp_state.max_temp:
-            logger.info(f"Temperature stabilized for experiment: {exp_state.experiment_id}")
+            logger.info(f"✨ Temperature STABILIZED for experiment: {exp_state.experiment_id} at {avg_temp:.2f}°C")
             exp_state.stabilized = True
             
             # Notify about stabilization
@@ -259,7 +263,7 @@ class KafkaConsumerService:
         # Insert reading into database
         reading = TemperatureReading(
             experiment_id=exp_state.experiment_id,
-            sensor_id="aggregated",  # Use aggregated as sensor ID for average
+            sensor_id="aggregated",
             timestamp=datetime.utcfromtimestamp(timestamp),
             temperature=avg_temp
         )
@@ -267,7 +271,7 @@ class KafkaConsumerService:
         try:
             db = SessionLocal()
             insert_reading(db, reading)
-            logger.debug(f"Inserted reading for {exp_state.experiment_id}: {avg_temp}°C")
+            logger.debug(f"💾 Inserted reading: {avg_temp:.2f}°C")
         except Exception as e:
             logger.error(f"Failed to insert reading: {e}")
         finally:
@@ -275,9 +279,9 @@ class KafkaConsumerService:
         
         # Check if out of range
         if avg_temp < exp_state.min_temp or avg_temp > exp_state.max_temp:
-            # Only notify once per out-of-range event (per measurement_id)
+            # Only notify once per unique measurement
             if measurement_id not in exp_state.last_notification_time:
-                logger.warning(f"Out of range temp for {exp_state.experiment_id}: {avg_temp}°C (range: {exp_state.min_temp}-{exp_state.max_temp})")
+                logger.warning(f"🔴 OUT OF RANGE: {avg_temp:.2f}°C (allowed: {exp_state.min_temp}-{exp_state.max_temp})")
                 exp_state.last_notification_time[measurement_id] = timestamp
                 
                 await self._notify_out_of_range(
@@ -287,9 +291,8 @@ class KafkaConsumerService:
     async def _handle_experiment_terminated(self, data: dict):
         """Handle experiment_terminated event"""
         experiment_id = data.get("experiment")
-        timestamp = data.get("timestamp")
         
-        logger.info(f"Experiment terminated: {experiment_id}")
+        logger.info(f"⏹️  Experiment terminated: {experiment_id}")
         
         if experiment_id in self.experiments:
             self.experiments[experiment_id].phase = "terminated"
@@ -316,7 +319,7 @@ class KafkaConsumerService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, params=params, json=payload)
                 response.raise_for_status()
-                logger.info(f"Stabilization notification sent: {response.status_code}")
+                logger.info(f"✅ Stabilization notification sent: {response.status_code}")
         
         except Exception as e:
             logger.error(f"Failed to send stabilization notification: {e}")
@@ -343,7 +346,7 @@ class KafkaConsumerService:
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, params=params, json=payload)
                 response.raise_for_status()
-                logger.info(f"Out-of-range notification sent: {response.status_code}")
+                logger.info(f"✅ Out-of-range notification sent: {response.status_code}")
         
         except Exception as e:
             logger.error(f"Failed to send out-of-range notification: {e}")
