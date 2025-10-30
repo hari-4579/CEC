@@ -315,6 +315,12 @@ class KafkaConsumerService:
                 "measurement_id": measurement_id,
                 "cipher_data": measurement_hash
             }
+
+            # Validate payload before sending
+            required_fields = ["notification_type", "researcher", "measurement_id", "experiment_id", "cipher_data"]
+            if not all(payload.get(f) for f in required_fields):
+                logger.warning("Skipping invalid notification payload: %s", payload)
+                return  # should just send a 200 and skip if anything is missing
             
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, params=params, json=payload)
@@ -342,7 +348,13 @@ class KafkaConsumerService:
                 "measurement_id": measurement_id,
                 "cipher_data": measurement_hash
             }
-            
+
+            # Validate payload before sending
+            required_fields = ["notification_type", "researcher", "measurement_id", "experiment_id", "cipher_data"]
+            if not all(payload.get(f) for f in required_fields):
+                logger.warning("Skipping invalid notification payload: %s", payload)
+                return  # should just send a 200 and skip if anything is missing
+
             async with httpx.AsyncClient(timeout=10.0) as client:
                 response = await client.post(url, params=params, json=payload)
                 response.raise_for_status()
