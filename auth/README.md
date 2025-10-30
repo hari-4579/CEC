@@ -1,0 +1,7 @@
+In the previous years, a lot of students used Visual Studio Code to access the VMs. One plugin in it used a lot of resources causing crashes while not adding any functionality they used. Here is an article on how to disable it:
+https://medium.com/good-robot/use-visual-studio-code-remote-ssh-sftp-without-crashing-your-server-a1dc2ef0936d
+[disabling: @builtin TypeScript]
+
+Different from previous years, you now have access to the AWS console, which allows you to interact with your own virtual machine and perform actions such as [start, stop, reboot and hibernate]. To do so, you will have to log into AWS ([link](https://sue-aws-student-01.signin.aws.amazon.com/console)). You can use the username and password provided in the `aws` file in your client's credentials directory. Upon logging in, you should be able to see all Virtual Machines that have been allocated for the purpose of this course, but you should only be able to interact with your own Virtual Machine. 
+
+If they don't use the link, they can connect using the following Account Alias: "" [this is the same for everyone, see the screenshot here]. On first log in they will have to replace their password. In case it's needed we can do a reset.

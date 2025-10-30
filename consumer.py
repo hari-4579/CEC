@@ -31,13 +31,13 @@ SCHEMA_REGISTRY_URL = os.getenv(
 )
 
 # SSL Configuration
-SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "auth/ca.crt")
-SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "auth/kafka.keystore.pkcs12")
+SSL_CA_LOCATION = os.getenv("SSL_CA_LOCATION", "./auth/ca.crt")
+SSL_KEYSTORE_LOCATION = os.getenv("SSL_KEYSTORE_LOCATION", "./auth/kafka.keystore.pkcs12")
 SSL_KEYSTORE_PASSWORD = os.getenv("SSL_KEYSTORE_PASSWORD", "cc2023")
 
 # Notifications Service
 NOTIFICATIONS_HOST = os.getenv("NOTIFICATIONS_HOST", "https://notifications-service-cec.ad.dlandau.nl")
-TOKEN_FILE = os.getenv("TOKEN_FILE", "./auth/token")
+TOKEN_FILE = os.getenv("TOKEN_FILE", "./credentials/token")
 
 
 class ExperimentState:

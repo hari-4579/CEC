@@ -10,7 +10,7 @@ from sqlalchemy.orm import Session
 
 from models import TemperatureReading, OutOfRangeSummary
 from db import init_db, get_db, query_readings
-from kafka_consumer import KafkaConsumerService
+from consumer import KafkaConsumerService
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("cec-temp-service")
@@ -21,8 +21,6 @@ app = FastAPI(title="CEC Temperature Service with Kafka & SQLite")
 TOKEN_FILE = os.environ.get("TOKEN_FILE", "./credentials/token")
 NOTIFICATIONS_HOST = os.environ.get("NOTIFICATIONS_HOST", "https://notifications-service-cec.ad.dlandau.nl")
 NOTIFICATIONS_PATH = "/api/notify"
-TEMP_MIN = float(os.environ.get("TEMP_MIN", "-10"))
-TEMP_MAX = float(os.environ.get("TEMP_MAX", "60"))
 
 kafka_service = KafkaConsumerService()
 
@@ -106,12 +104,21 @@ async def get_out_of_range(experiment_id: str = Query(..., alias="experiment-id"
     """
     Check for out-of-range temperatures for an experiment.
     If out-of-range readings are found, attempt to notify the notifications-service.
+    Thresholds are experiment-specific (from ExperimentConfig).
     """
     rows = query_readings(db, experiment_id, None, None)
     if not rows:
         raise HTTPException(status_code=404, detail="No readings found for this experiment")
 
-    out_of_range = [r for r in rows if (r.temperature < TEMP_MIN or r.temperature > TEMP_MAX)]
+    # Get experiment-specific thresholds from kafka consumer service
+    if experiment_id not in kafka_service.experiments:
+        raise HTTPException(status_code=404, detail="Experiment not found or not configured")
+    
+    exp_state = kafka_service.experiments[experiment_id]
+    min_allowed = exp_state.min_temp
+    max_allowed = exp_state.max_temp
+
+    out_of_range = [r for r in rows if (r.temperature < min_allowed or r.temperature > max_allowed)]
     sensors: Set[str] = set(r.sensor_id for r in out_of_range)
 
     summary = OutOfRangeSummary(
@@ -119,8 +126,8 @@ async def get_out_of_range(experiment_id: str = Query(..., alias="experiment-id"
         total_readings=len(rows),
         out_of_range_count=len(out_of_range),
         sensors=sorted(list(sensors)),
-        min_allowed=TEMP_MIN,
-        max_allowed=TEMP_MAX,
+        min_allowed=min_allowed,
+        max_allowed=max_allowed,
         notified=False,
         notification_response=None,
     )
