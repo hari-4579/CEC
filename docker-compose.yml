@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  temperature-service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: cec-temperature-service
+    ports:
+      - "3003:3003"
+    environment:
+      # Database Configuration
+      DATABASE_URL: "sqlite:///./data/readings.db"
+      
+      # Kafka Configuration
+      KAFKA_BOOTSTRAP_SERVERS: "kafka1.dlandau.nl:19092,kafka2.dlandau.nl:29092,kafka3.dlandau.nl:39092"
+      KAFKA_GROUP_ID: "group3_123456"
+      TEAM_TOPIC: "experiment"
+      SCHEMA_REGISTRY_URL: "https://schema-registry.dlandau.nl"
+      
+      # SSL Configuration
+      SSL_CA_LOCATION: "auth/ca.crt"
+      SSL_KEYSTORE_LOCATION: "auth/kafka.keystore.pkcs12"
+      SSL_KEYSTORE_PASSWORD: "cc2023"
+      
+      # Notifications Configuration
+      NOTIFICATIONS_HOST: "https://notifications-service-cec.ad.dlandau.nl"
+      TOKEN_FILE: "./credentials/token"
+      
+    volumes:
+      # Mount local certificate files if testing locally
+      - ./auth:/app/auth:ro
+      - ./credentials:/app/credentials:ro
+      - ./data:/app/data
+    
+    networks:
+      - cec-network
+    
+    restart: unless-stopped
+
+networks:
+  cec-network:
+    driver: bridge
