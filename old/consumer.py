@@ -62,9 +62,9 @@ def notify(payload):
     except Exception as e:
         print(f"[NOTIFY ERROR] {e}", file=sys.stderr)
 
-# ----------------------
+
 # Decode / process
-# ----------------------
+
 def decode(msg_value, record_name, experiments_col, records_col):
     print("---STARTING---")
     for msg in iter_avro_records(msg_value):
